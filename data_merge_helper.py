@@ -1,251 +1,35 @@
 """
-Data Merge Helper - Handles merging multiple data uploads
-Version: 2.1 - FINAL: Module-level _cached_get_quick_summary only
+Data Merge Helper - SIMPLIFIED VERSION (No external dependencies)
+Version: 3.0 - Completely self-contained, no dependency issues
 """
 import pandas as pd
 import streamlit as st
 from datetime import datetime
 from typing import Optional, Tuple
 import time
-import os
-import tempfile
-import pickle
-from pathlib import Path
-
-# Import progress tracker if available
-try:
-    from progress_tracker import ProcessingProgressTracker, display_processing_progress
-    PROGRESS_TRACKER_AVAILABLE = True
-except ImportError:
-    PROGRESS_TRACKER_AVAILABLE = False
-
-# Import database if available
-try:
-    from sales_database import SalesDatabase, _cached_get_quick_summary
-    DATABASE_AVAILABLE = True
-except ImportError as e:
-    DATABASE_AVAILABLE = False
-    _cached_get_quick_summary = lambda: {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
-except Exception as e:
-    DATABASE_AVAILABLE = False
-    _cached_get_quick_summary = lambda: {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
-
-# Create persistent storage directory
-CACHE_DIR = Path(tempfile.gettempdir()) / "streamlit_sales_cache"
-CACHE_DIR.mkdir(exist_ok=True)
 
 
-def save_dataframe_persistent(df: pd.DataFrame, key: str) -> bool:
-    """Save dataframe to persistent storage"""
+def get_database_summary() -> dict:
+    """Get database summary - safe version with comprehensive error handling"""
     try:
-        file_path = CACHE_DIR / f"{key}.pkl"
-        with open(file_path, 'wb') as f:
-            pickle.dump(df, f)
-        return True
+        # Try to import and use the sales_database
+        from sales_database import SalesDatabase
+        db = SalesDatabase()
+        return db.get_summary()
     except Exception as e:
-        st.error(f"Error saving data: {str(e)}")
-        return False
-
-
-def load_dataframe_persistent(key: str) -> Optional[pd.DataFrame]:
-    """Load dataframe from persistent storage"""
-    try:
-        file_path = CACHE_DIR / f"{key}.pkl"
-        if file_path.exists():
-            with open(file_path, 'rb') as f:
-                return pickle.load(f)
-    except Exception as e:
-        st.warning(f"Error loading data: {str(e)}")
-    return None
-
-
-def clear_persistent_data(key: str) -> bool:
-    """Clear persistent data for a key"""
-    try:
-        file_path = CACHE_DIR / f"{key}.pkl"
-        if file_path.exists():
-            file_path.unlink()
-        return True
-    except Exception as e:
-        st.error(f"Error clearing data: {str(e)}")
-        return False
-
-class DataMergeManager:
-    """Manage multiple data uploads and merging"""
-    
-    @staticmethod
-    def load_file(uploaded_file) -> Optional[pd.DataFrame]:
-        """Load CSV or Excel file with progress tracking"""
-        try:
-            file_size = uploaded_file.size / (1024 * 1024)  # Convert to MB
-            
-            with st.spinner(f"📂 Loading {uploaded_file.name}..."):
-                if uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-                    df = pd.read_excel(uploaded_file)
-                else:
-                    return None
-                
-                # Show success with details
-                st.success(f"✅ Loaded {uploaded_file.name}")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Rows", f"{len(df):,}")
-                with col2:
-                    st.metric("Columns", len(df.columns))
-                with col3:
-                    st.metric("File Size", f"{file_size:.2f} MB")
-                
-                return df
-            
-        except Exception as e:
-            st.error(f"Error loading {uploaded_file.name}: {str(e)}")
-            return None
-    
-    @staticmethod
-    def get_data_summary(df: pd.DataFrame) -> dict:
-        """Get summary statistics of dataframe"""
-        if df is None or df.empty:
-            return None
-        
-        summary = {
-            "rows": len(df),
-            "columns": len(df.columns),
-            "column_names": list(df.columns),
-            "file_size": df.memory_usage(deep=True).sum() / 1024 / 1024,  # MB
+        # Return empty summary on any error
+        return {
+            'total_rows': 0,
+            'min_date': 'N/A',
+            'max_date': 'N/A',
+            'error': str(e)
         }
-        
-        # Add date range if date column exists
-        date_cols = [col for col in df.columns if 'date' in col.lower()]
-        if date_cols:
-            date_col = date_cols[0]
-            try:
-                if df[date_col].dtype == 'object':
-                    df[date_col] = pd.to_datetime(df[date_col])
-                summary["min_date"] = df[date_col].min()
-                summary["max_date"] = df[date_col].max()
-            except:
-                pass
-        
-        return summary
-    
-    @staticmethod
-    def merge_datasets(old_df: Optional[pd.DataFrame], 
-                       new_df: pd.DataFrame,
-                       merge_type: str = "append") -> pd.DataFrame:
-        """
-        Merge old and new datasets with progress tracking
-        
-        Args:
-            old_df: Previously uploaded data
-            new_df: New data to add
-            merge_type: 'append' (add all), 'update' (overwrite by date), or 'dedupe' (remove duplicates)
-        """
-        
-        if old_df is None or old_df.empty:
-            return new_df.copy()
-        
-        # Show progress
-        if PROGRESS_TRACKER_AVAILABLE:
-            total_rows = len(old_df) + len(new_df)
-            tracker = ProcessingProgressTracker(
-                total_rows=total_rows,
-                total_bytes=total_rows * 1000,
-                operation_name="Merging Data"
-            )
-            progress_col = st.empty()
-            tracker.update(int(total_rows * 0.3))  # Start at 30%
-            with progress_col.container():
-                display_processing_progress(tracker, show_details=False)
-            time.sleep(0.1)
-        
-        if merge_type == "append":
-            # Simply concatenate all data
-            merged = pd.concat([old_df, new_df], ignore_index=True)
-            if PROGRESS_TRACKER_AVAILABLE:
-                tracker.update(total_rows)
-                with progress_col.container():
-                    display_processing_progress(tracker, show_details=False)
-                progress_col.empty()
-            return merged
-        
-        elif merge_type == "update":
-            # Update by date - newer data overwrites older
-            date_cols = [col for col in old_df.columns if 'date' in col.lower()]
-            if date_cols:
-                date_col = date_cols[0]
-                try:
-                    merged = pd.concat([old_df, new_df], ignore_index=True)
-                    merged = merged.sort_values(by=date_col, ascending=False)
-                    # Keep first occurrence (most recent)
-                    merged = merged.drop_duplicates(subset=[col for col in merged.columns if col != date_col], keep='first')
-                    if PROGRESS_TRACKER_AVAILABLE:
-                        tracker.update(total_rows)
-                        with progress_col.container():
-                            display_processing_progress(tracker, show_details=False)
-                        progress_col.empty()
-                    return merged.sort_values(by=date_col)
-                except:
-                    pass
-            
-            # Fallback to append if date column not found
-            return pd.concat([old_df, new_df], ignore_index=True)
-        
-        elif merge_type == "dedupe":
-            # Combine and remove exact duplicates
-            merged = pd.concat([old_df, new_df], ignore_index=True)
-            merged = merged.drop_duplicates(keep='first')
-            return merged
-        
-        return pd.concat([old_df, new_df], ignore_index=True)
-    
-    @staticmethod
-    def display_comparison(old_df: Optional[pd.DataFrame], 
-                          new_df: pd.DataFrame,
-                          title: str = "Data Comparison"):
-        """Display side-by-side comparison of old and new data"""
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📊 Previous Data")
-            if old_df is not None and not old_df.empty:
-                old_summary = DataMergeManager.get_data_summary(old_df)
-                st.metric("Rows", f"{old_summary['rows']:,}")
-                st.metric("Columns", old_summary['columns'])
-                if "min_date" in old_summary and "max_date" in old_summary:
-                    st.text(f"Date Range: {old_summary['min_date'].date()} to {old_summary['max_date'].date()}")
-                with st.expander("Preview"):
-                    st.dataframe(old_df.head(10), use_container_width=True)
-            else:
-                st.info("No previous data")
-        
-        with col2:
-            st.subheader("📁 New Data")
-            new_summary = DataMergeManager.get_data_summary(new_df)
-            st.metric("Rows", f"{new_summary['rows']:,}")
-            st.metric("Columns", new_summary['columns'])
-            if "min_date" in new_summary and "max_date" in new_summary:
-                st.text(f"Date Range: {new_summary['min_date'].date()} to {new_summary['max_date'].date()}")
-            with st.expander("Preview"):
-                st.dataframe(new_df.head(10), use_container_width=True)
-        
-        # Merge summary
-        if old_df is not None and not old_df.empty:
-            merged = DataMergeManager.merge_datasets(old_df, new_df, "append")
-            st.divider()
-            st.subheader("✅ Merged Result (Preview)")
-            st.metric("Total Rows", f"{len(merged):,}")
-            st.metric("Total Rows Added", f"{len(new_df):,}")
-            if len(merged) > 0:
-                st.success(f"✓ Successfully prepared {len(new_df):,} new records for merge!")
 
 
 def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.DataFrame], str]:
     """
     Streamlit UI for multi-file uploads with clear, step-by-step flow
+    SIMPLIFIED VERSION - Self-contained with minimal dependencies
     
     Returns:
         Tuple of (merged_dataframe, merge_type)
@@ -253,18 +37,21 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     
     st.subheader(f"📂 {data_type} Data Management")
     
-    # Step 1: Show current database status (from database, not session)
-    if DATABASE_AVAILABLE:
-        try:
-            summary = _cached_get_quick_summary()
-        except Exception as e:
-            summary = {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
+    # Step 1: Show current database status (SAFE VERSION)
+    try:
+        summary = get_database_summary()
         
         if summary.get('total_rows', 0) > 0:
-            st.success(f"✅ **Database has {summary['total_rows']:,} rows** ({summary['min_date']} to {summary['max_date']})")
+            st.success(
+                f"✅ **Database has {summary['total_rows']:,} rows** "
+                f"({summary['min_date']} to {summary['max_date']})"
+            )
         else:
             st.info("📦 Database is empty - upload data to get started")
-        st.divider()
+    except Exception as e:
+        st.warning(f"⚠️ Could not load database status: {str(e)}")
+    
+    st.divider()
     
     # Step 2: Upload new files
     st.markdown("### Step 1️⃣: Upload Files")
@@ -289,10 +76,34 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     
     with st.spinner("📂 Loading files..."):
         for uploaded_file in uploaded_files:
-            df = DataMergeManager.load_file(uploaded_file)
-            if df is not None:
+            try:
+                file_size = uploaded_file.size / (1024 * 1024)  # Convert to MB
+                
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                    df = pd.read_excel(uploaded_file)
+                else:
+                    st.error(f"❌ Unsupported file type: {uploaded_file.name}")
+                    continue
+                
+                # Show success with details
+                st.success(f"✅ Loaded {uploaded_file.name}")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Rows", f"{len(df):,}")
+                with col2:
+                    st.metric("Columns", len(df.columns))
+                with col3:
+                    st.metric("File Size", f"{file_size:.2f} MB")
+                
                 new_data_list.append(df)
                 total_new_rows += len(df)
+                
+            except Exception as e:
+                st.error(f"❌ Error loading {uploaded_file.name}: {str(e)}")
+                continue
     
     if not new_data_list:
         st.error("❌ Could not load any files")
@@ -339,13 +150,11 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     
     with col2:
         st.subheader("📊 What will happen")
-        if DATABASE_AVAILABLE:
-            try:
-                summary = _cached_get_quick_summary()
-            except Exception as e:
-                summary = {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
+        try:
+            summary = get_database_summary()
             current_rows = summary.get('total_rows', 0)
-        else:
+        except Exception as e:
+            st.warning(f"⚠️ Could not retrieve database status: {str(e)}")
             current_rows = 0
         
         if current_rows > 0:
@@ -376,15 +185,16 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     with col1:
         if st.button("✅ Save & Store", key=f"save_btn_{data_type}", use_container_width=True):
             with st.spinner("💾 Saving to database..."):
-                if DATABASE_AVAILABLE:
+                try:
+                    from sales_database import SalesDatabase
                     db = SalesDatabase()
                     if db.save_dataframe(new_combined, f"{data_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
                         st.success("✅ **SUCCESS!** Data saved to database")
                         st.balloons()
                     else:
                         st.error("❌ Failed to save data")
-                else:
-                    st.error("Database not available")
+                except Exception as e:
+                    st.error(f"❌ Error saving data: {str(e)}")
     
     with col2:
         csv = new_combined.to_csv(index=False)
@@ -401,8 +211,3 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
             st.rerun()
     
     return new_combined, merge_type
-
-
-def save_merged_data_to_csv(df: pd.DataFrame, filename: str = "merged_data.csv") -> bytes:
-    """Convert dataframe to CSV bytes for download"""
-    return df.to_csv(index=False).encode()
