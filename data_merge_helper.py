@@ -1,6 +1,6 @@
 """
 Data Merge Helper - Handles merging multiple data uploads
-Version: 2.0 - Fixed _cached_get_quick_summary() calls
+Version: 2.1 - FINAL: Module-level _cached_get_quick_summary only
 """
 import pandas as pd
 import streamlit as st
