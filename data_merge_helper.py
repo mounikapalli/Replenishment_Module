@@ -1,6 +1,6 @@
 """
 Data Merge Helper - SIMPLIFIED VERSION (No external dependencies)
-Version: 3.0 - Completely self-contained, no dependency issues
+Version: 3.1 - FORCE REDEPLOY - Completely self-contained, no dependency issues
 """
 import pandas as pd
 import streamlit as st
