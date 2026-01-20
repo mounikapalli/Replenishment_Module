@@ -27,6 +27,25 @@ except ImportError:
     DATABASE_AVAILABLE = False
     _cached_get_quick_summary = None
 
+
+def get_db_summary():
+    """Get database summary with multiple fallback methods"""
+    if _cached_get_quick_summary:
+        try:
+            return _cached_get_quick_summary()
+        except:
+            pass
+    
+    # Fallback: try class method
+    if DATABASE_AVAILABLE:
+        try:
+            return SalesDatabase._cached_get_quick_summary()
+        except:
+            pass
+    
+    # Last resort: return empty summary
+    return {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
+
 # Create persistent storage directory
 CACHE_DIR = Path(tempfile.gettempdir()) / "streamlit_sales_cache"
 CACHE_DIR.mkdir(exist_ok=True)
@@ -251,8 +270,8 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     st.subheader(f"📂 {data_type} Data Management")
     
     # Step 1: Show current database status (from database, not session)
-    if DATABASE_AVAILABLE and _cached_get_quick_summary:
-        summary = _cached_get_quick_summary()
+    if DATABASE_AVAILABLE:
+        summary = get_db_summary()
         
         if summary.get('total_rows', 0) > 0:
             st.success(f"✅ **Database has {summary['total_rows']:,} rows** ({summary['min_date']} to {summary['max_date']})")
@@ -334,7 +353,7 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     with col2:
         st.subheader("📊 What will happen")
         if DATABASE_AVAILABLE:
-            summary = _cached_get_quick_summary()
+            summary = get_db_summary()
             current_rows = summary.get('total_rows', 0)
         else:
             current_rows = 0

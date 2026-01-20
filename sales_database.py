@@ -111,12 +111,20 @@ class SalesDatabase:
             }
         except Exception as e:
             return {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
-
-
-# Cached function for quick summary
+    
+    @staticmethod
+    @st.cache_data(ttl=3600)
+    def _cached_get_quick_summary() -> Dict:
+        """Cached static method for quick summary"""
+        try:
+            db = SalesDatabase()
+            return db.get_summary()
+        except Exception as e:
+            return {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A', 'error': str(e)}
+# Cached function for quick summary (module level)
 @st.cache_data(ttl=3600)
 def _cached_get_quick_summary() -> Dict:
-    """Get cached database summary"""
+    """Get cached database summary - works as module function or fallback"""
     try:
         db = SalesDatabase()
         return db.get_summary()
