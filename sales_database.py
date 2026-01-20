@@ -117,8 +117,11 @@ class SalesDatabase:
 @st.cache_data(ttl=3600)
 def _cached_get_quick_summary() -> Dict:
     """Get cached database summary"""
-    db = SalesDatabase()
-    return db.get_summary()
+    try:
+        db = SalesDatabase()
+        return db.get_summary()
+    except Exception as e:
+        return {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A', 'error': str(e)}
 
 
 # Streamlit UI functions

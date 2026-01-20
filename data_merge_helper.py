@@ -21,10 +21,11 @@ except ImportError:
 
 # Import database if available
 try:
-    from sales_database import SalesDatabase
+    from sales_database import SalesDatabase, _cached_get_quick_summary
     DATABASE_AVAILABLE = True
 except ImportError:
     DATABASE_AVAILABLE = False
+    _cached_get_quick_summary = None
 
 # Create persistent storage directory
 CACHE_DIR = Path(tempfile.gettempdir()) / "streamlit_sales_cache"
@@ -250,8 +251,7 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     st.subheader(f"📂 {data_type} Data Management")
     
     # Step 1: Show current database status (from database, not session)
-    if DATABASE_AVAILABLE:
-        from sales_database import _cached_get_quick_summary
+    if DATABASE_AVAILABLE and _cached_get_quick_summary:
         summary = _cached_get_quick_summary()
         
         if summary.get('total_rows', 0) > 0:
