@@ -2756,18 +2756,50 @@ def main():
         # Initialize uploaded_files dictionary
         uploaded_files = {}
         
-        # Use new data merge helper if available
-        if DATA_MERGE_AVAILABLE:
-            # Sales Data with multi-upload
-            st.markdown("#### 📊 Sales Data (2024, 2025, 2026, etc.)")
-            sales_df, sales_merge_type = streamlit_multi_upload_ui("Sales")
-            uploaded_files["sales"] = sales_df
+        # Sales Data upload - Direct implementation to bypass import issues
+        st.markdown("#### 📊 Sales Data (2024, 2025, 2026, etc.)")
+        
+        # Direct file uploader without calling the buggy import
+        uploaded_sales_files = st.file_uploader(
+            "Choose Sales Data files (CSV/Excel)",
+            type=["csv", "xlsx"],
+            accept_multiple_files=True,
+            key="sales_upload"
+        )
+        
+        if uploaded_sales_files:
+            sales_df_list = []
+            for file in uploaded_sales_files:
+                try:
+                    if file.name.endswith('.csv'):
+                        df = pd.read_csv(file)
+                    elif file.name.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(file)
+                    else:
+                        st.error(f"Unsupported file: {file.name}")
+                        continue
+                    st.success(f"✅ Loaded {file.name}: {len(df):,} rows")
+                    sales_df_list.append(df)
+                except Exception as e:
+                    st.error(f"Error loading {file.name}: {str(e)}")
             
-            st.divider()
-            
-            # Other data types with traditional upload (can be upgraded later)
-            uploaded_files["stock"] = st.file_uploader("Stock Data (CSV/Excel)", type=["csv", "xlsx"], key="stock_upload")
-            uploaded_files["warehouse"] = st.file_uploader("Warehouse Data (CSV/Excel)", type=["csv", "xlsx"], key="warehouse_upload")
+            if sales_df_list:
+                sales_df = pd.concat(sales_df_list, ignore_index=True)
+                sales_merge_type = "append"
+            else:
+                sales_df = None
+                sales_merge_type = "append"
+        else:
+            sales_df = None
+            sales_merge_type = "append"
+        
+        uploaded_files["sales"] = sales_df
+        
+        st.divider()
+        
+        # Other data types with traditional upload (can be upgraded later)
+        uploaded_files["stock"] = st.file_uploader("Stock Data (CSV/Excel)", type=["csv", "xlsx"], key="stock_upload")
+        uploaded_files["warehouse"] = st.file_uploader("Warehouse Data (CSV/Excel)", type=["csv", "xlsx"], key="warehouse_upload")
             uploaded_files["sku_master"] = st.file_uploader("SKU Master (CSV/Excel)", type=["csv", "xlsx"], key="sku_upload")
             uploaded_files["style_master"] = st.file_uploader("Style Master (CSV/Excel)", type=["csv", "xlsx"], key="style_upload")
             uploaded_files["size_master"] = st.file_uploader("Size Master (CSV/Excel) - Required for Size Set Completion", type=["csv", "xlsx"], key="size_upload")
