@@ -29,6 +29,136 @@ MAX_WORKERS = multiprocessing.cpu_count()
 CHUNK_SIZE = 100000
 MEMORY_LIMIT = 0.75  # Use max 75% of available memory
 
+# Data persistence setup
+DATA_CACHE_DIR = Path("data_cache")
+DATA_CACHE_DIR.mkdir(exist_ok=True)
+
+def save_data_to_cache(data_dict, cache_key="user_data"):
+    """Save uploaded data to persistent cache"""
+    try:
+        cache_file = DATA_CACHE_DIR / f"{cache_key}.pkl"
+        
+        # Convert DataFrames to a serializable format
+        serializable_data = {}
+        for key, df in data_dict.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                # Save as parquet for better compression and speed
+                parquet_file = DATA_CACHE_DIR / f"{cache_key}_{key}.parquet"
+                df.to_parquet(parquet_file, compression='snappy')
+                serializable_data[key] = {
+                    'file_path': str(parquet_file),
+                    'shape': df.shape,
+                    'columns': list(df.columns),
+                    'timestamp': datetime.now().isoformat()
+                }
+        
+        # Save metadata
+        with open(cache_file, 'w') as f:
+            json.dump(serializable_data, f, indent=2)
+            
+        logger.info(f"Data cached successfully: {len(data_dict)} datasets")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving data to cache: {str(e)}")
+        return False
+
+def load_data_from_cache(cache_key="user_data"):
+    """Load previously uploaded data from cache"""
+    try:
+        cache_file = DATA_CACHE_DIR / f"{cache_key}.pkl"
+        
+        if not cache_file.exists():
+            return {}
+        
+        # Load metadata
+        with open(cache_file, 'r') as f:
+            metadata = json.load(f)
+        
+        # Load DataFrames
+        data_dict = {}
+        for key, info in metadata.items():
+            parquet_file = Path(info['file_path'])
+            if parquet_file.exists():
+                try:
+                    df = pd.read_parquet(parquet_file)
+                    data_dict[key] = df
+                    logger.info(f"Loaded {key}: {info['shape']} from cache")
+                except Exception as e:
+                    logger.warning(f"Could not load {key} from cache: {str(e)}")
+        
+        return data_dict
+        
+    except Exception as e:
+        logger.error(f"Error loading data from cache: {str(e)}")
+        return {}
+
+def clear_data_cache(cache_key="user_data"):
+    """Clear cached data"""
+    try:
+        cache_file = DATA_CACHE_DIR / f"{cache_key}.pkl"
+        
+        if cache_file.exists():
+            # Load metadata to find parquet files
+            with open(cache_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Delete parquet files
+            for key, info in metadata.items():
+                parquet_file = Path(info['file_path'])
+                if parquet_file.exists():
+                    parquet_file.unlink()
+            
+            # Delete metadata file
+            cache_file.unlink()
+            
+        logger.info("Data cache cleared successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error clearing cache: {str(e)}")
+        return False
+
+def get_cache_info(cache_key="user_data"):
+    """Get information about cached data"""
+    try:
+        cache_file = DATA_CACHE_DIR / f"{cache_key}.pkl"
+        
+        if not cache_file.exists():
+            return None
+        
+        with open(cache_file, 'r') as f:
+            metadata = json.load(f)
+        
+        info = {
+            'datasets': len(metadata),
+            'total_size_mb': 0,
+            'last_updated': None,
+            'details': {}
+        }
+        
+        for key, data_info in metadata.items():
+            parquet_file = Path(data_info['file_path'])
+            if parquet_file.exists():
+                size_mb = parquet_file.stat().st_size / 1024 / 1024
+                info['total_size_mb'] += size_mb
+                info['details'][key] = {
+                    'shape': data_info['shape'],
+                    'size_mb': round(size_mb, 2),
+                    'timestamp': data_info['timestamp']
+                }
+                
+                # Track most recent update
+                if info['last_updated'] is None or data_info['timestamp'] > info['last_updated']:
+                    info['last_updated'] = data_info['timestamp']
+        
+        info['total_size_mb'] = round(info['total_size_mb'], 2)
+        return info
+        
+    except Exception as e:
+        logger.error(f"Error getting cache info: {str(e)}")
+        return None
+
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
@@ -164,6 +294,256 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from pathlib import Path
 import io
+import sys
+import os
+
+# Add current directory to Python path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+# Import the new store style efficiency module
+try:
+    from store_style_efficiency import StoreStyleEfficiencyAnalyzer
+    
+    def render_store_style_efficiency_analysis():
+        """Render the Store Style Efficiency Analysis interface"""
+        st.markdown("## 🎯 Store Style Efficiency Analysis")
+        st.markdown("Analyze optimal number of styles per store based on sales performance, stock turnover, and warehouse availability.")
+        
+        # Check if data is available in session state
+        required_data = ['sales', 'stock', 'warehouse', 'sku_master']
+        missing_data = [key for key in required_data if key not in st.session_state or st.session_state[key].empty]
+        
+        if missing_data:
+            st.warning(f"⚠️ Missing required data: {', '.join(missing_data)}")
+            st.info("Please upload all required data files in the Data Upload tab first.")
+            return
+        
+        # Analysis parameters
+        st.markdown("### Analysis Parameters")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            time_period = st.selectbox(
+                "Analysis Period",
+                [30, 60, 90, 120],
+                index=2,
+                format_func=lambda x: f"Last {x} days"
+            )
+        
+        with col2:
+            efficiency_threshold = st.slider(
+                "Efficiency Threshold",
+                min_value=30,
+                max_value=80,
+                value=50,
+                help="Minimum efficiency score for style recommendations"
+            )
+        
+        with col3:
+            run_analysis = st.button("🚀 Run Analysis", type="primary")
+        
+        if run_analysis or st.session_state.get('efficiency_analysis_results'):
+            with st.spinner("Running Store Style Efficiency Analysis..."):
+                try:
+                    # Initialize analyzer
+                    analyzer = StoreStyleEfficiencyAnalyzer()
+                    
+                    # Load data from session state with error handling
+                    sales_data = st.session_state['sales'].copy()
+                    stock_data = st.session_state['stock'].copy()
+                    warehouse_data = st.session_state['warehouse'].copy()
+                    sku_master = st.session_state['sku_master'].copy()
+                    style_master = st.session_state.get('style_master', None)
+                    
+                    # Clean data types to avoid comparison errors
+                    for df_name, df in [('sales', sales_data), ('stock', stock_data), ('warehouse', warehouse_data)]:
+                        for col in df.columns:
+                            if df[col].dtype == 'object':
+                                df[col] = df[col].astype(str).str.strip()
+                    
+                    analyzer.load_data(sales_data, stock_data, warehouse_data, sku_master, style_master)
+                    
+                    # Calculate metrics
+                    st.info("📊 Calculating style performance metrics...")
+                    style_metrics = analyzer.calculate_style_performance_metrics(time_period_days=time_period)
+                    
+                    if style_metrics.empty:
+                        st.error("❌ No style metrics could be calculated. Please check your data.")
+                        return
+                    
+                    st.info("🏪 Determining optimal styles per store...")
+                    store_recommendations = analyzer.determine_optimal_styles_per_store(
+                        style_metrics, 
+                        efficiency_threshold=efficiency_threshold
+                    )
+                    
+                    if store_recommendations.empty:
+                        st.error("❌ No store recommendations could be generated. Please check your data.")
+                        return
+                    
+                    # Store results in session state
+                    st.session_state['efficiency_analysis_results'] = {
+                        'style_metrics': style_metrics,
+                        'store_recommendations': store_recommendations,
+                        'time_period': time_period,
+                        'efficiency_threshold': efficiency_threshold
+                    }
+                    
+                    st.success("✅ Analysis completed successfully!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.exception(e)
+                    return
+        
+        # Display results if available
+        if st.session_state.get('efficiency_analysis_results'):
+            results = st.session_state['efficiency_analysis_results']
+            style_metrics = results['style_metrics']
+            store_recommendations = results['store_recommendations']
+            
+            # Summary metrics
+            st.markdown("### 📊 Analysis Summary")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_stores = len(store_recommendations)
+                st.metric("Stores Analyzed", total_stores)
+            
+            with col2:
+                avg_current_styles = store_recommendations['CURRENT_TOTAL_STYLES'].mean()
+                st.metric("Avg Current Styles", f"{avg_current_styles:.1f}")
+            
+            with col3:
+                avg_recommended_styles = store_recommendations['RECOMMENDED_STYLES'].mean()
+                st.metric("Avg Recommended Styles", f"{avg_recommended_styles:.1f}")
+            
+            with col4:
+                avg_efficiency = store_recommendations['AVG_EFFICIENCY_SCORE'].mean()
+                st.metric("Avg Efficiency Score", f"{avg_efficiency:.1f}")
+            
+            # Store recommendations table
+            st.markdown("### 🏪 Store Recommendations")
+            
+            # Format the recommendations table
+            display_recommendations = store_recommendations.copy()
+            display_recommendations['STYLE_CHANGE'] = display_recommendations['RECOMMENDED_STYLES'] - display_recommendations['CURRENT_TOTAL_STYLES']
+            display_recommendations['CHANGE_PCT'] = (display_recommendations['STYLE_CHANGE'] / display_recommendations['CURRENT_TOTAL_STYLES'] * 100).round(1)
+            
+            # Add formatting and select relevant columns
+            display_columns = [
+                'STORE', 'STORE_NAME', 'CURRENT_TOTAL_STYLES', 'RECOMMENDED_STYLES', 
+                'STYLE_CHANGE', 'CHANGE_PCT', 'AVG_EFFICIENCY_SCORE', 'STORE_CATEGORY'
+            ]
+            
+            # Only include columns that exist
+            available_columns = [col for col in display_columns if col in display_recommendations.columns]
+            display_recommendations = display_recommendations[available_columns]
+            
+            st.dataframe(
+                display_recommendations,
+                use_container_width=True,
+                column_config={
+                    "CHANGE_PCT": st.column_config.NumberColumn(
+                        "Change %",
+                        format="%.1f%%"
+                    ),
+                    "AVG_EFFICIENCY_SCORE": st.column_config.NumberColumn(
+                        "Avg Efficiency Score",
+                        format="%.1f"
+                    ),
+                    "CURRENT_TOTAL_STYLES": "Current Styles",
+                    "RECOMMENDED_STYLES": "Recommended Styles",
+                    "STYLE_CHANGE": "Change",
+                    "STORE_CATEGORY": "Category"
+                }
+            )
+            
+            # Visualizations
+            st.markdown("### 📈 Analysis Visualizations")
+            
+            viz_col1, viz_col2 = st.columns(2)
+            
+            with viz_col1:
+                # Current vs Recommended Styles
+                fig_comparison = px.scatter(
+                    store_recommendations,
+                    x='CURRENT_TOTAL_STYLES',
+                    y='RECOMMENDED_STYLES',
+                    color='AVG_EFFICIENCY_SCORE',
+                    size='AVG_EFFICIENCY_SCORE',
+                    hover_data=['STORE'] + (['STORE_NAME'] if 'STORE_NAME' in store_recommendations.columns else []),
+                    title='Current vs Recommended Styles by Store'
+                )
+                fig_comparison.add_line(x=[0, store_recommendations['CURRENT_TOTAL_STYLES'].max()], 
+                                      y=[0, store_recommendations['CURRENT_TOTAL_STYLES'].max()], 
+                                      line_dash="dash", line_color="red")
+                st.plotly_chart(fig_comparison, use_container_width=True)
+            
+            with viz_col2:
+                # Efficiency Score Distribution
+                fig_efficiency = px.histogram(
+                    store_recommendations,
+                    x='AVG_EFFICIENCY_SCORE',
+                    nbins=20,
+                    title='Store Efficiency Score Distribution'
+                )
+                st.plotly_chart(fig_efficiency, use_container_width=True)
+            
+            # Performance category breakdown
+            st.markdown("### 🎯 Performance Category Breakdown")
+            if 'STORE_CATEGORY' in store_recommendations.columns:
+                category_counts = store_recommendations['STORE_CATEGORY'].value_counts()
+                
+                fig_categories = px.pie(
+                    values=category_counts.values,
+                    names=category_counts.index,
+                    title='Store Performance Categories'
+                )
+                st.plotly_chart(fig_categories, use_container_width=True)
+            else:
+                st.info("Performance category data not available.")
+            
+            # Export functionality
+            st.markdown("### 💾 Export Results")
+            if st.button("📊 Generate CSV Report"):
+                try:
+                    # Create a simple CSV export
+                    csv_data = store_recommendations.to_csv(index=False)
+                    
+                    st.download_button(
+                        label="📥 Download CSV Report",
+                        data=csv_data,
+                        file_name=f"Store_Efficiency_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                    st.success("✅ CSV report ready for download!")
+                except Exception as e:
+                    st.error(f"Error generating CSV report: {str(e)}")
+            
+            # Also show style metrics if available
+            if not style_metrics.empty:
+                st.markdown("### 📋 Detailed Style Metrics")
+                with st.expander("View Style Performance Details", expanded=False):
+                    st.dataframe(style_metrics, use_container_width=True)
+                    
+                    # Style metrics CSV export
+                    if st.button("📊 Download Style Metrics CSV"):
+                        style_csv = style_metrics.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Style Metrics",
+                            data=style_csv,
+                            file_name=f"Style_Metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+
+except ImportError as e:
+    st.error(f"Could not import store style efficiency module: {e}")
+    def render_store_style_efficiency_analysis():
+        st.error("Store Style Efficiency Analysis module not available.")
+        st.info("Please ensure store_style_efficiency.py is in the same directory.")
 
 # Configure Pandas display options
 pd.set_option('display.float_format', lambda x: '%.2f' % x)
@@ -988,18 +1368,18 @@ def read_file(uploaded_file):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Define data types and validation rules
+        # Define data types and validation rules - Use string for all categories to avoid type mixing
         dtype_dict = {
-            'SKU': 'category',
-            'STORE': 'category',
-            'STYLE': 'category',
-            'COLOR': 'category',
-            'SIZE': 'category',
-            'GENDER': 'category',
-            'QUANTITY': 'float32',
-            'STOCK': 'float32',
-            'WAREHOUSE_STOCK': 'float32',
-            'DATE': 'datetime64[ns]'
+            'SKU': 'str',
+            'STORE': 'str', 
+            'STYLE': 'str',
+            'COLOR': 'str',
+            'SIZE': 'str',
+            'GENDER': 'str',
+            'QUANTITY': 'float64',
+            'STOCK': 'float64',
+            'WAREHOUSE_STOCK': 'float64'
+            # Don't specify DATE dtype here, handle separately
         }
         
         # Memory usage before processing
@@ -1007,84 +1387,44 @@ def read_file(uploaded_file):
         
         if file_type == 'csv':
             try:
-                # Initialize parallel processing
-                with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    # Read CSV in chunks with parallel processing
-                    chunks = []
-                    total_chunks = sum(1 for _ in pd.read_csv(
-                        uploaded_file, 
-                        chunksize=CHUNK_SIZE, 
-                        nrows=2
-                    )) * CHUNK_SIZE
-                    
-                    # Process chunks in parallel with progress tracking
-                    for i, chunk in enumerate(pd.read_csv(
-                        uploaded_file,
-                        dtype=dtype_dict,
-                        na_values=['', 'NA', 'null'],
-                        chunksize=CHUNK_SIZE,
-                        low_memory=True
-                    )):
-                        # Update progress
-                        progress = (i * CHUNK_SIZE) / total_chunks
-                        progress_bar.progress(progress)
-                        status_text.text(f"Processing chunk {i+1}...")
-                        
-                        # Process chunk in parallel
-                        future = executor.submit(
-                            process_chunk,
-                            chunk,
-                            dtype_dict
-                        )
-                        chunks.append(future.result())
-                        
-                        # Check memory usage
-                        current_memory = psutil.Process().memory_info().rss / 1024 / 1024
-                        if current_memory > psutil.virtual_memory().total * MEMORY_LIMIT:
-                            st.warning("⚠️ High memory usage detected. Try reducing file size.")
-                            
-                    # Combine processed chunks
-                    df = pd.concat(chunks, ignore_index=True)
-                    
-                    # Clear progress
-                    progress_bar.empty()
-                    status_text.empty()
-                    
-            except Exception as e:
-                logger.error(f"Error in parallel processing: {str(e)}")
-                st.error("Error in parallel processing. Falling back to standard processing...")
-                
-                # Fallback to standard processing
+                # Read CSV with improved error handling
                 df = pd.read_csv(
                     uploaded_file,
-                    dtype=dtype_dict,
-                    na_values=['', 'NA', 'null']
+                    dtype='str',  # Read everything as string first
+                    na_values=['', 'NA', 'null', 'NaN'],
+                    keep_default_na=False,
+                    low_memory=True
                 )
+                    
+                # Clear progress
+                progress_bar.empty()
+                status_text.empty()
+                    
+            except Exception as e:
+                logger.error(f"Error reading CSV: {str(e)}")
+                st.error(f"Error reading CSV file: {str(e)}")
+                return pd.DataFrame()
             
         elif file_type in ['xls', 'xlsx']:
-            # For Excel files, use optimization parameters
-            df = pd.read_excel(
-                uploaded_file,
-                dtype=dtype_dict,
-                engine='openpyxl'
-            )
+            try:
+                # For Excel files, read as string first
+                df = pd.read_excel(
+                    uploaded_file,
+                    dtype='str',  # Read everything as string first
+                    engine='openpyxl',
+                    na_values=['', 'NA', 'null', 'NaN'],
+                    keep_default_na=False
+                )
+            except Exception as e:
+                logger.error(f"Error reading Excel: {str(e)}")
+                st.error(f"Error reading Excel file: {str(e)}")
+                return pd.DataFrame()
         else:
             st.error(f"Unsupported file type: {file_type}")
             return pd.DataFrame()
         
-        # Optimize memory usage
-        df = df.copy()  # Create a copy to avoid SettingWithCopyWarning
-        
-        # More efficient cleaning
-        string_columns = df.select_dtypes(include=['object']).columns
-        for col in string_columns:
-            if col not in dtype_dict:
-                df[col] = df[col].fillna('').str.strip().astype('category')
-        
-        # Fill numeric columns with 0 instead of empty string
-        numeric_columns = df.select_dtypes(include=['int64', 'float64']).columns
-        for col in numeric_columns:
-            df[col] = df[col].fillna(0)
+        # Now clean and convert data types safely
+        df = clean_and_convert_datatypes(df)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -1106,6 +1446,51 @@ def read_file(uploaded_file):
         st.error(f"Error reading file: {str(e)}")
         return pd.DataFrame()
 
+def clean_and_convert_datatypes(df):
+    """Clean and convert data types safely to avoid comparison errors"""
+    try:
+        # Create a copy to avoid warnings
+        df = df.copy()
+        
+        # Clean all columns first - convert everything to string and strip whitespace
+        for col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            # Replace various null representations
+            df[col] = df[col].replace(['nan', 'NaN', 'NA', 'null', 'None', ''], pd.NA)
+        
+        # Handle date columns
+        date_columns = ['DATE', 'BILL_DATE', 'date', 'Date']
+        for col in df.columns:
+            if any(date_col.lower() in col.lower() for date_col in date_columns):
+                try:
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                except Exception:
+                    pass  # Keep as string if conversion fails
+        
+        # Handle numeric columns
+        numeric_columns = ['QUANTITY', 'STOCK', 'WAREHOUSE_STOCK', 'quantity', 'stock', 'BILL_QUANTITY']
+        for col in df.columns:
+            if any(num_col.lower() in col.lower() for num_col in numeric_columns):
+                try:
+                    # Convert to numeric, replacing errors with 0
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                except Exception:
+                    df[col] = 0
+        
+        # Handle categorical columns (keep as string but clean)
+        categorical_columns = ['SKU', 'STORE', 'STYLE', 'COLOR', 'SIZE', 'GENDER', 'DEPARTMENT']
+        for col in df.columns:
+            if any(cat_col.lower() in col.lower() for cat_col in categorical_columns):
+                df[col] = df[col].fillna('').astype(str).str.strip()
+                # Remove any remaining nan strings
+                df[col] = df[col].replace(['nan', 'NaN', 'NA', 'null', 'None'], '')
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error cleaning data: {str(e)}")
+        return df
+
 def detect_column(df, possible_names):
     """Find a column from a list of possible names"""
     for name in possible_names:
@@ -1123,42 +1508,81 @@ def safe_numeric(value):
         return 0
 
 def validate_data(df: pd.DataFrame, file_type: str) -> Tuple[bool, List[str]]:
-    """Validate data quality and completeness"""
+    """Validate data quality and completeness with improved error handling"""
     errors = []
     
-    # Check for required columns based on file type
-    required_columns = {
-        'sales': ['DATE', 'STORE', 'SKU', 'QUANTITY'],
-        'stock': ['STORE', 'SKU', 'STOCK'],
-        'warehouse': ['SKU', 'WAREHOUSE_STOCK'],
-        'sku_master': ['SKU', 'STYLE', 'COLOR', 'SIZE']
-    }
-    
-    if file_type in required_columns:
-        missing_cols = [col for col in required_columns[file_type] 
-                       if col not in df.columns]
-        if missing_cols:
-            errors.append(f"Missing required columns: {', '.join(missing_cols)}")
-    
-    # Check for duplicate records
-    duplicates = df.duplicated()
-    if duplicates.any():
-        errors.append(f"Found {duplicates.sum()} duplicate records")
-    
-    # Check for data type consistency
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            non_string = df[col].apply(lambda x: not isinstance(x, str))
-            if non_string.any():
-                errors.append(f"Column {col} contains mixed data types")
-    
-    # Validate date formats if present
-    if 'DATE' in df.columns:
-        invalid_dates = pd.to_datetime(df['DATE'], errors='coerce').isna()
-        if invalid_dates.any():
-            errors.append(f"Found {invalid_dates.sum()} invalid dates")
-    
-    return len(errors) == 0, errors
+    try:
+        # Check for required columns based on file type
+        required_columns = {
+            'sales': ['DATE', 'STORE', 'SKU', 'QUANTITY'],
+            'stock': ['STORE', 'SKU', 'STOCK'], 
+            'warehouse': ['SKU', 'WAREHOUSE_STOCK'],
+            'sku_master': ['SKU', 'STYLE', 'COLOR', 'SIZE']
+        }
+        
+        if file_type in required_columns:
+            # Check for columns that might have different names
+            available_cols = [col.upper() for col in df.columns]
+            missing_cols = []
+            
+            for req_col in required_columns[file_type]:
+                # Check for exact match or partial match
+                found = False
+                for actual_col in df.columns:
+                    if req_col.lower() in actual_col.lower() or actual_col.upper() == req_col:
+                        found = True
+                        break
+                if not found:
+                    missing_cols.append(req_col)
+            
+            if missing_cols:
+                errors.append(f"Missing required columns: {', '.join(missing_cols)}")
+        
+        # Check for empty dataframe
+        if df.empty:
+            errors.append("File appears to be empty")
+            return False, errors
+        
+        # Check for duplicate records (if DataFrame is not too large)
+        if len(df) < 100000:  # Only check for reasonable sized DataFrames
+            try:
+                duplicates = df.duplicated()
+                if duplicates.any():
+                    errors.append(f"Found {duplicates.sum()} duplicate records")
+            except Exception:
+                pass  # Skip duplicate check if it fails
+        
+        # Validate date formats if present (improved)
+        for col in df.columns:
+            if 'date' in col.lower():
+                try:
+                    non_null_dates = df[col].dropna()
+                    if len(non_null_dates) > 0:
+                        parsed_dates = pd.to_datetime(non_null_dates, errors='coerce')
+                        invalid_dates = parsed_dates.isna()
+                        if invalid_dates.any():
+                            errors.append(f"Found {invalid_dates.sum()} invalid dates in {col}")
+                except Exception:
+                    pass  # Skip date validation if it fails
+        
+        # Check for numeric columns
+        for col in df.columns:
+            if any(num_word in col.lower() for num_word in ['quantity', 'stock', 'amount']):
+                try:
+                    non_null_values = df[col].dropna()
+                    if len(non_null_values) > 0:
+                        numeric_values = pd.to_numeric(non_null_values, errors='coerce')
+                        invalid_numbers = numeric_values.isna()
+                        if invalid_numbers.any():
+                            errors.append(f"Found {invalid_numbers.sum()} non-numeric values in {col}")
+                except Exception:
+                    pass  # Skip numeric validation if it fails
+        
+        return len(errors) == 0, errors
+        
+    except Exception as e:
+        errors.append(f"Validation error: {str(e)}")
+        return False, errors
 
 def clean_text(value):
     """Clean text fields with advanced handling"""
@@ -1537,15 +1961,96 @@ def show_sample_data(df, label):
                 st.markdown("**Stock Column:** Total Available Quantity detected ✅")
         
         st.markdown("**Sample Data:**")
-        st.dataframe(
-            df.head(5),
-            use_container_width=True,
-            height=200
-        )
+        try:
+            # Safely display the sample data with error handling
+            sample_df = df.head(5).copy()
+            
+            # Convert any problematic columns to string for display
+            for col in sample_df.columns:
+                if sample_df[col].dtype == 'object':
+                    sample_df[col] = sample_df[col].astype(str)
+            
+            st.dataframe(
+                sample_df,
+                use_container_width=True,
+                height=200
+            )
+        except Exception as e:
+            st.error(f"Error displaying sample data: {str(e)}")
+            st.info("Data loaded successfully but preview unavailable due to formatting issues.")
 
 def main():
+    # Initialize session state for data persistence
+    if 'data_initialized' not in st.session_state:
+        st.session_state['data_initialized'] = False
+    
     # Sidebar
     with st.sidebar:
+        st.markdown("## 🔒 User Login")
+        if 'logged_in' not in st.session_state:
+            st.session_state['logged_in'] = False
+        if not st.session_state['logged_in']:
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.button("Login"):
+                if username and password:
+                    st.session_state['logged_in'] = True
+                    st.session_state['username'] = username
+                    
+                    # Load cached data after login
+                    if not st.session_state['data_initialized']:
+                        with st.spinner("Restoring your previous data..."):
+                            cached_data = load_data_from_cache(f"user_{username}")
+                            if cached_data:
+                                for key, df in cached_data.items():
+                                    st.session_state[key] = df
+                                st.session_state['data_initialized'] = True
+                                st.success(f"Logged in as {username} - Previous data restored!")
+                            else:
+                                st.session_state['data_initialized'] = True
+                                st.success(f"Logged in as {username}")
+                else:
+                    st.error("Please enter both username and password.")
+            st.stop()
+        else:
+            st.success(f"Logged in as {st.session_state['username']}")
+            
+            # Show cached data info if available
+            cache_info = get_cache_info(f"user_{st.session_state['username']}")
+            if cache_info:
+                st.markdown("### 💾 Cached Data")
+                st.markdown(f"**Datasets:** {cache_info['datasets']}")
+                st.markdown(f"**Size:** {cache_info['total_size_mb']} MB")
+                if cache_info['last_updated']:
+                    last_update = datetime.fromisoformat(cache_info['last_updated'])
+                    st.markdown(f"**Last Updated:** {last_update.strftime('%Y-%m-%d %H:%M')}")
+                
+                # Clear cache button
+                if st.button("🗑️ Clear Cached Data"):
+                    if clear_data_cache(f"user_{st.session_state['username']}"):
+                        # Clear session state data
+                        for key in ['sales', 'stock', 'warehouse', 'sku_master', 'style_master']:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        st.success("Cached data cleared!")
+                        st.experimental_rerun()
+            
+            if st.button("Logout"):
+                # Save data before logout
+                username = st.session_state['username']
+                data_to_save = {}
+                for key in ['sales', 'stock', 'warehouse', 'sku_master', 'style_master']:
+                    if key in st.session_state and not st.session_state[key].empty:
+                        data_to_save[key] = st.session_state[key]
+                
+                if data_to_save:
+                    with st.spinner("Saving your data..."):
+                        save_data_to_cache(data_to_save, f"user_{username}")
+                
+                st.session_state['logged_in'] = False
+                st.session_state['username'] = ""
+                st.session_state['data_initialized'] = False
+                st.experimental_rerun()
         st.markdown("## 📊 Analytics Dashboard")
         st.markdown("---")
         st.markdown("### 📁 Data Upload")
@@ -1635,6 +2140,14 @@ def main():
     # Main Content
     st.markdown("<h1 class='title'>Retail Analytics Dashboard</h1>", unsafe_allow_html=True)
     
+    # Show data restoration status
+    if st.session_state.get('logged_in') and not st.session_state.get('data_initialized'):
+        st.info("🔄 Checking for previously uploaded data...")
+    elif st.session_state.get('data_initialized'):
+        cache_info = get_cache_info(f"user_{st.session_state['username']}")
+        if cache_info and cache_info['datasets'] > 0:
+            st.success(f"✅ {cache_info['datasets']} datasets restored from previous session ({cache_info['total_size_mb']} MB)")
+    
     # Process uploaded files and save to backend API
     data = {}
     
@@ -1652,18 +2165,38 @@ def main():
         if uploaded_file:
             # First read and clean the data locally
             df = cleaning_functions[file_type](read_file(uploaded_file))
-            
             if not df.empty:
+                # Add username to the DataFrame
+                username = st.session_state.get('username', 'unknown')
+                df['uploaded_by'] = username
+                
+                # Store in session state
+                st.session_state[file_type] = df
+                data[file_type] = df
+                
                 # Upload file to API and get response
                 api_response = upload_file_to_api(uploaded_file, file_type)
-                
                 if api_response:
-                    # Store the cleaned data for further processing
-                    data[file_type] = df
-                    st.success(f"✅ Successfully uploaded {file_type} data to backend")
+                    st.success(f"✅ Successfully uploaded {file_type} data to backend as {username}")
                 else:
                     st.warning(f"⚠️ Could not save {file_type} data to backend, but will continue with analysis")
-                    data[file_type] = df    # Data Preview Section
+    
+    # Auto-save data when new files are uploaded
+    if data and st.session_state.get('username'):
+        data_to_save = {}
+        for key in ['sales', 'stock', 'warehouse', 'sku_master', 'style_master']:
+            if key in st.session_state and not st.session_state[key].empty:
+                data_to_save[key] = st.session_state[key]
+        
+        if data_to_save:
+            # Save in background without blocking UI
+            save_data_to_cache(data_to_save, f"user_{st.session_state['username']}")
+    
+    # Load cached data if no new uploads
+    if not data and st.session_state.get('username') and st.session_state.get('data_initialized'):
+        for key in ['sales', 'stock', 'warehouse', 'sku_master', 'style_master']:
+            if key in st.session_state and not st.session_state[key].empty:
+                data[key] = st.session_state[key]
     st.markdown("## Data Overview")
     st.markdown("Review your uploaded data below. Click to expand each section.")
     
@@ -1765,6 +2298,7 @@ def main():
         # Analysis Tabs
         tabs = st.tabs([
             "📋 Replenishment",
+            "🎯 Store Style Efficiency",
             "📈 Sales Analysis", 
             "📊 Stock Analysis",
             "🏬 Store Performance",
@@ -2008,6 +2542,24 @@ def main():
                                 st.info("No replenishment data available for chart.")
 
         with tabs[1]:
+            # Store Style Efficiency Analysis Tab
+            # Store data in session state for the analysis module
+            if all(k in data for k in ['sales', 'stock', 'warehouse', 'sku_master']):
+                st.session_state['sales'] = data['sales']
+                st.session_state['stock'] = data['stock']
+                st.session_state['warehouse'] = data['warehouse']
+                st.session_state['sku_master'] = data['sku_master']
+                if 'style_master' in data:
+                    st.session_state['style_master'] = data['style_master']
+                
+                # Render the store style efficiency analysis
+                render_store_style_efficiency_analysis()
+            else:
+                st.warning("⚠️ Store Style Efficiency Analysis requires sales, stock, warehouse, and SKU master data.")
+                missing = [k for k in ['sales', 'stock', 'warehouse', 'sku_master'] if k not in data]
+                st.info(f"Missing data: {', '.join(missing)}")
+
+        with tabs[2]:
             st.markdown("### Sales Trends")
             if 'sales' in data:
                 # Daily Sales Trend
@@ -2024,7 +2576,7 @@ def main():
                 st.markdown("#### Sales by Store")
                 st.bar_chart(store_sales)
         
-        with tabs[2]:
+        with tabs[3]:
             st.markdown("### Stock Distribution")
             if 'stock' in data:
                 # Overall Stock Distribution
@@ -2043,7 +2595,7 @@ def main():
                     st.markdown("#### Zero Stock Items by Store")
                     st.bar_chart(zero_stock)
         
-        with tabs[3]:
+        with tabs[4]:
             st.markdown("### Store Performance")
             if all(k in data for k in ['sales', 'stock']):
                 # Store Performance Analysis
@@ -2081,7 +2633,7 @@ def main():
                 else:
                     st.bar_chart(store_metrics_display['Total_Sales'].sort_values(ascending=False))
         
-        with tabs[4]:
+        with tabs[5]:
             st.markdown("### SKU Analysis")
             if all(k in data for k in ['sku_master', 'sales', 'style_master']):
                 # Merge sales with SKU and style master
@@ -2116,7 +2668,7 @@ def main():
                 style_sales = sku_analysis.groupby('STYLE')['QUANTITY'].sum().sort_values(ascending=False).head(10)
                 st.bar_chart(style_sales)
         
-        with tabs[5]:
+        with tabs[6]:
             st.markdown("### Performance Metrics")
             if all(k in data for k in ['sales', 'stock', 'warehouse', 'sku_master']):
                 

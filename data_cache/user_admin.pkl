@@ -1,0 +1,76 @@
+{
+  "sales": {
+    "file_path": "data_cache\\user_admin_sales.parquet",
+    "shape": [
+      335018,
+      7
+    ],
+    "columns": [
+      "SKU",
+      "DATE",
+      "QUANTITY",
+      "STORE_CODE",
+      "STORE",
+      "STORE_NAME",
+      "uploaded_by"
+    ],
+    "timestamp": "2025-11-03T14:29:44.869975"
+  },
+  "stock": {
+    "file_path": "data_cache\\user_admin_stock.parquet",
+    "shape": [
+      57529,
+      6
+    ],
+    "columns": [
+      "SKU",
+      "STOCK",
+      "STORE_CODE",
+      "STORE",
+      "STORE_NAME",
+      "uploaded_by"
+    ],
+    "timestamp": "2025-11-03T14:29:45.090782"
+  },
+  "warehouse": {
+    "file_path": "data_cache\\user_admin_warehouse.parquet",
+    "shape": [
+      6401,
+      3
+    ],
+    "columns": [
+      "SKU",
+      "WAREHOUSE_STOCK",
+      "uploaded_by"
+    ],
+    "timestamp": "2025-11-03T14:29:45.116483"
+  },
+  "sku_master": {
+    "file_path": "data_cache\\user_admin_sku_master.parquet",
+    "shape": [
+      21477,
+      5
+    ],
+    "columns": [
+      "SKU",
+      "STYLE",
+      "COLOR",
+      "SIZE",
+      "uploaded_by"
+    ],
+    "timestamp": "2025-11-03T14:29:45.184913"
+  },
+  "style_master": {
+    "file_path": "data_cache\\user_admin_style_master.parquet",
+    "shape": [
+      491,
+      3
+    ],
+    "columns": [
+      "STYLE",
+      "GENDER",
+      "uploaded_by"
+    ],
+    "timestamp": "2025-11-03T14:29:45.195819"
+  }
+}
