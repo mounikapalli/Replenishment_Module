@@ -23,7 +23,10 @@ except ImportError:
 try:
     from sales_database import SalesDatabase, _cached_get_quick_summary
     DATABASE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    DATABASE_AVAILABLE = False
+    _cached_get_quick_summary = lambda: {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
+except Exception as e:
     DATABASE_AVAILABLE = False
     _cached_get_quick_summary = lambda: {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
 
@@ -252,7 +255,10 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     
     # Step 1: Show current database status (from database, not session)
     if DATABASE_AVAILABLE:
-        summary = _cached_get_quick_summary()
+        try:
+            summary = _cached_get_quick_summary()
+        except Exception as e:
+            summary = {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
         
         if summary.get('total_rows', 0) > 0:
             st.success(f"✅ **Database has {summary['total_rows']:,} rows** ({summary['min_date']} to {summary['max_date']})")
@@ -334,7 +340,10 @@ def streamlit_multi_upload_ui(data_type: str = "Sales") -> Tuple[Optional[pd.Dat
     with col2:
         st.subheader("📊 What will happen")
         if DATABASE_AVAILABLE:
-            summary = _cached_get_quick_summary()
+            try:
+                summary = _cached_get_quick_summary()
+            except Exception as e:
+                summary = {'total_rows': 0, 'min_date': 'N/A', 'max_date': 'N/A'}
             current_rows = summary.get('total_rows', 0)
         else:
             current_rows = 0
